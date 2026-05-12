@@ -90,14 +90,3 @@ Pushed to `ghcr.io/runwhen-contrib/rw-base-runtime` by
 
 Codecollections (and the CC image catalog in cc-registry-v2) treat
 `<rt_sha>` as the commit pinned in the tag suffix.
-
-## Relationship to `platform-robot-runtime`
-
-`platform-robot-runtime` is the original repo where these scripts and
-Dockerfiles lived. It remains the authoritative codebase for the Python
-helper scripts during the migration; `rw-base-runtime` will track its
-changes (with the helper scripts copied in, not symlinked) until the
-helper scripts move here permanently.
-
-Deprecation of `platform-robot-runtime` is **not** done in this change;
-nothing in that repo is removed yet.

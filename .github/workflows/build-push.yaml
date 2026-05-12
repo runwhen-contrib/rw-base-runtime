@@ -112,17 +112,15 @@ jobs:
             if [ -n "${IN_BASE_PY:-}" ]; then echo "base_py_arg=BASE_PY_IMAGE=${IN_BASE_PY}"; fi
           } >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU (multi-arch)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       # ----------------------------------------------------------------
-      # Decide if we push. Pushes happen on push events, on tag events,
+      # Decide if we push. Pushes happen on push events (branch/tag),
       # and on dispatch when `push` is true. PRs do NOT push by default
       # to avoid burning GHCR retention on every commit; flip the input
       # when a PR build needs to be consumed by cc-registry-v2.
+      #
+      # The push flag also gates whether we bother running the multi-arch
+      # build at all -- there is no value in burning ~15min of QEMU-emulated
+      # arm64 builds just to discard the result on a PR.
       # ----------------------------------------------------------------
       - name: Determine push flag
         id: push_flag
@@ -138,6 +136,15 @@ jobs:
               echo "should_push=false" >> "$GITHUB_OUTPUT" ;;
           esac
 
+      # QEMU is only needed for the multi-arch (arm64) build step. Skip
+      # it on PRs so we don't pay the setup cost when we wouldn't use it.
+      - name: Set up QEMU (multi-arch)
+        if: steps.push_flag.outputs.should_push == 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
         if: steps.push_flag.outputs.should_push == 'true'
         uses: docker/login-action@v3
@@ -147,18 +154,35 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # ----------------------------------------------------------------
-      # Smoke test build (single-arch, native, no push). This catches
-      # Dockerfile regressions before we burn time on the multi-arch
-      # build and lets us exec the resulting image for in-container
-      # checks.
+      # Smoke build (native amd64, loaded into docker for exec testing).
+      #
+      # Caching strategy:
+      #   cache-from / cache-to = type=gha (GitHub Actions cache backend)
+      #   scope=rw-base-runtime
+      #
+      # The cache backend is shared with the multi-arch build below, so:
+      #   - First run after the cache is empty: full build (~10 min).
+      #   - Subsequent runs: only the layers that actually changed rebuild.
+      #     The expensive stages (rust `cargo install linear-cli`, cloud SDK
+      #     downloads, apt installs) hit cache and are ~free.
+      #   - Within this single run: the multi-arch step reuses the amd64
+      #     layers this step just produced (same buildx builder + same gha
+      #     scope = no rebuild).
+      #
+      # We explicitly pin platforms: linux/amd64 here so the smoke build
+      # never accidentally enters QEMU emulation just because the runner
+      # arch shifts in the future.
       # ----------------------------------------------------------------
       - name: Build (smoke, native, load)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
+          platforms: linux/amd64
           load: true
           tags: rw-base-runtime:smoke
+          cache-from: type=gha,scope=rw-base-runtime
+          cache-to: type=gha,mode=max,scope=rw-base-runtime
           build-args: |
             ${{ steps.args.outputs.worker_arg }}
             ${{ steps.args.outputs.base_py_arg }}
@@ -167,10 +191,14 @@ jobs:
         run: |
           set -euo pipefail
           # Verify the rw-core-keywords install + helper script layout
-          # without running the real worker entrypoint.
+          # without running the real worker entrypoint. The set of imports
+          # below covers the modules that ship in the current PyPI release:
+          # RW.Core (keyword surface), RW.platform (platform client),
+          # RW.fetchsecrets (the canonical secret-resolution entry point
+          # per AGENTS.md in platform-robot-runtime).
           docker run --rm --entrypoint /bin/bash rw-base-runtime:smoke -c '
             set -eux
-            python3 -c "import RW.Core; import RW.Utils; import robot"
+            python3 -c "import RW.Core, RW.platform, RW.fetchsecrets, robot"
             robot --version || true
             test -x /home/runwhen/worker
             test -x /home/runwhen/robot-runtime/entrypoint.sh
@@ -182,23 +210,39 @@ jobs:
             helm version --short
             az version || true
             gcloud --version
+            linear-cli --version || true
+            claude --version || true
           '
 
       # ----------------------------------------------------------------
-      # The real (multi-arch) build that publishes the canonical tags.
+      # Multi-arch build that publishes the canonical tags.
+      #
+      # Skipped entirely on PRs (should_push == false) -- there's no
+      # point spending ~15min on emulated arm64 just to discard the
+      # output. arm64 regressions get caught on the first push to main
+      # after merge; if you need to validate arm64 from a PR, dispatch
+      # this workflow with push=true.
+      #
+      # Cache: reuses the amd64 layers the smoke build wrote moments ago
+      # (same buildx instance + same gha scope), and writes back the
+      # arm64 layers so the next run pays the QEMU price only for new
+      # changes.
       # ----------------------------------------------------------------
       - name: Build & push (multi-arch)
+        if: steps.push_flag.outputs.should_push == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           platforms: ${{ inputs.platforms || 'linux/amd64,linux/arm64' }}
-          push: ${{ steps.push_flag.outputs.should_push == 'true' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             io.runwhen.runtime.commit=${{ github.sha }}
+          cache-from: type=gha,scope=rw-base-runtime
+          cache-to: type=gha,mode=max,scope=rw-base-runtime
           build-args: |
             ${{ steps.args.outputs.worker_arg }}
             ${{ steps.args.outputs.base_py_arg }}
