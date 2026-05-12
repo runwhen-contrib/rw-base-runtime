@@ -1,0 +1,16 @@
+# System-wide Python deps installed into the rw-base-runtime image.
+#
+# rw-core-keywords (https://pypi.org/project/rw-core-keywords/) is the
+# RunWhen Robot Framework keyword library and the single source of truth
+# for RW.Core / RW.Utils. It transitively pulls in robotframework, PyYAML,
+# requests, PyGithub, prometheus-client, hvac, backoff, azure-identity,
+# azure-mgmt-{containerservice,resource,subscription}, kubernetes, and
+# opentelemetry-{api,sdk,exporter-otlp-proto-http} -- so codecollection
+# images do NOT need to re-list any of those.
+rw-core-keywords>=2026.3.6.1
+
+# psutil is consumed by the runtime metrics daemon (scripts/metrics_daemon.py,
+# scripts/process_metrics.py, scripts/runtime_metrics.py). It is intentionally
+# not a dependency of rw-core-keywords (the keyword library has no opinion
+# on process metrics) so we list it here directly.
+psutil>=5.9.0
