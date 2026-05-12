@@ -1,6 +1,27 @@
 name: Build And Push
 
-# Builds the rw-base-runtime image and pushes it to GHCR.
+# Builds the rw-base-runtime image and pushes a multi-arch manifest to GHCR.
+#
+# Architecture
+# ------------
+# The build is split across three jobs so each platform is built natively
+# rather than under QEMU emulation:
+#
+#   prepare        -- compute tags + push flag once, share with later jobs
+#   build (matrix) -- one job per platform, each on its own native runner:
+#                       linux/amd64 -> ubuntu-latest
+#                       linux/arm64 -> ubuntu-24.04-arm
+#                     each job:
+#                       1. builds the image natively (no QEMU)
+#                       2. loads it into the local docker daemon
+#                       3. runs the smoke test against the native arch
+#                       4. on push, builds again push-by-digest (no tags)
+#                          and exports the per-platform digest as an artifact
+#   merge          -- pulls the per-platform digests and uses
+#                     `docker buildx imagetools create` to stitch them
+#                     into a single multi-arch manifest under the
+#                     canonical tags. This is purely a registry-side
+#                     metadata operation -- no image rebuild.
 #
 # Tag schema (mirrored verbatim by cc-registry-v2's OCISource and used as
 # the `rt_sha` suffix by every codecollection image build):
@@ -8,11 +29,8 @@ name: Build And Push
 #   <sha7>            – every build (e.g. "c1a2b3d")
 #   <full-sha>        – every build, full 40-char sha
 #   main / latest     – push to main
-#   pr-<n>            – pull_request builds
+#   pr-<n>            – pull_request builds (smoke only; not pushed by default)
 #   <ref>             – git tags (e.g. "v1.2.0")
-#
-# `cc-registry-v2`'s `OCISource` ingests these tags; PAPI resolves them
-# through the catalog API.
 
 on:
   push:
@@ -37,11 +55,6 @@ on:
         required: false
         default: true
         type: boolean
-      platforms:
-        description: "Comma-separated buildx platforms."
-        required: false
-        default: "linux/amd64,linux/arm64"
-        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -52,17 +65,29 @@ permissions:
   packages: write
 
 jobs:
-  build-and-push:
+  # ===========================================================================
+  # prepare — single source of truth for the tag set and push flag so the
+  # matrix builds and the final merge job don't drift.
+  # ===========================================================================
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      should_push: ${{ steps.push_flag.outputs.should_push }}
+      tags: ${{ steps.meta.outputs.tags }}
+      repo_lc: ${{ steps.meta.outputs.repo_lc }}
+      worker_arg: ${{ steps.args.outputs.worker_arg }}
+      base_py_arg: ${{ steps.args.outputs.base_py_arg }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+      - name: Determine push flag
+        id: push_flag
+        run: |
+          case "${{ github.event_name }}" in
+            push)             echo "should_push=true"  >> "$GITHUB_OUTPUT" ;;
+            pull_request)     echo "should_push=false" >> "$GITHUB_OUTPUT" ;;
+            workflow_dispatch) echo "should_push=${{ inputs.push }}" >> "$GITHUB_OUTPUT" ;;
+            *)                echo "should_push=false" >> "$GITHUB_OUTPUT" ;;
+          esac
 
-      # ----------------------------------------------------------------
-      # Compute the tag set this build will publish.
-      # ----------------------------------------------------------------
       - name: Compute tags
         id: meta
         run: |
@@ -76,7 +101,6 @@ jobs:
               if [ "${{ github.ref_type }}" = "tag" ]; then
                 tags+=( "${repo_lc}:${{ github.ref_name }}" )
               else
-                # push to a branch (main)
                 tags+=( "${repo_lc}:${{ github.ref_name }}" "${repo_lc}:latest" )
               fi
               ;;
@@ -86,9 +110,6 @@ jobs:
           esac
           {
             echo "repo_lc=${repo_lc}"
-            echo "sha=${sha}"
-            echo "sha7=${sha7}"
-            # Comma-separated for docker/build-push-action's `tags:` input.
             printf 'tags=%s\n' "$(IFS=,; echo "${tags[*]}")"
           } >> "$GITHUB_OUTPUT"
 
@@ -97,9 +118,6 @@ jobs:
             echo "- \`${t}\`"             >> "$GITHUB_STEP_SUMMARY"
           done
 
-      # ----------------------------------------------------------------
-      # Resolve dispatch overrides into build args we'll feed buildx.
-      # ----------------------------------------------------------------
       - name: Resolve build args
         id: args
         env:
@@ -112,41 +130,37 @@ jobs:
             if [ -n "${IN_BASE_PY:-}" ]; then echo "base_py_arg=BASE_PY_IMAGE=${IN_BASE_PY}"; fi
           } >> "$GITHUB_OUTPUT"
 
-      # ----------------------------------------------------------------
-      # Decide if we push. Pushes happen on push events (branch/tag),
-      # and on dispatch when `push` is true. PRs do NOT push by default
-      # to avoid burning GHCR retention on every commit; flip the input
-      # when a PR build needs to be consumed by cc-registry-v2.
-      #
-      # The push flag also gates whether we bother running the multi-arch
-      # build at all -- there is no value in burning ~15min of QEMU-emulated
-      # arm64 builds just to discard the result on a PR.
-      # ----------------------------------------------------------------
-      - name: Determine push flag
-        id: push_flag
-        run: |
-          case "${{ github.event_name }}" in
-            push)
-              echo "should_push=true" >> "$GITHUB_OUTPUT" ;;
-            pull_request)
-              echo "should_push=false" >> "$GITHUB_OUTPUT" ;;
-            workflow_dispatch)
-              echo "should_push=${{ inputs.push }}" >> "$GITHUB_OUTPUT" ;;
-            *)
-              echo "should_push=false" >> "$GITHUB_OUTPUT" ;;
-          esac
-
-      # QEMU is only needed for the multi-arch (arm64) build step. Skip
-      # it on PRs so we don't pay the setup cost when we wouldn't use it.
-      - name: Set up QEMU (multi-arch)
-        if: steps.push_flag.outputs.should_push == 'true'
-        uses: docker/setup-qemu-action@v3
+  # ===========================================================================
+  # build — parallel native builds. Each matrix leg runs on a runner
+  # whose architecture matches the platform it is building, so there's
+  # no QEMU emulation cost. The smoke test consequently runs on real
+  # hardware for each arch (today's QEMU-only workflow never actually
+  # exercised arm64 binaries -- it just compiled them).
+  # ===========================================================================
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: steps.push_flag.outputs.should_push == 'true'
+        if: needs.prepare.outputs.should_push == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -154,48 +168,33 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # ----------------------------------------------------------------
-      # Smoke build (native amd64, loaded into docker for exec testing).
+      # Phase 1: build the image natively and load it into the local
+      # docker daemon so we can exec it for the smoke test.
       #
-      # Caching strategy:
-      #   cache-from / cache-to = type=gha (GitHub Actions cache backend)
-      #   scope=rw-base-runtime
-      #
-      # The cache backend is shared with the multi-arch build below, so:
-      #   - First run after the cache is empty: full build (~10 min).
-      #   - Subsequent runs: only the layers that actually changed rebuild.
-      #     The expensive stages (rust `cargo install linear-cli`, cloud SDK
-      #     downloads, apt installs) hit cache and are ~free.
-      #   - Within this single run: the multi-arch step reuses the amd64
-      #     layers this step just produced (same buildx builder + same gha
-      #     scope = no rebuild).
-      #
-      # We explicitly pin platforms: linux/amd64 here so the smoke build
-      # never accidentally enters QEMU emulation just because the runner
-      # arch shifts in the future.
+      # Caching: per-arch GHA cache scope. The two matrix legs run in
+      # parallel on different runners, so they must NOT share a scope
+      # (otherwise the two writes will race on the cache manifest).
       # ----------------------------------------------------------------
-      - name: Build (smoke, native, load)
+      - name: Build (native, load)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           load: true
           tags: rw-base-runtime:smoke
-          cache-from: type=gha,scope=rw-base-runtime
-          cache-to: type=gha,mode=max,scope=rw-base-runtime
+          cache-from: type=gha,scope=rw-base-runtime-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=rw-base-runtime-${{ matrix.arch }}
           build-args: |
-            ${{ steps.args.outputs.worker_arg }}
-            ${{ steps.args.outputs.base_py_arg }}
+            ${{ needs.prepare.outputs.worker_arg }}
+            ${{ needs.prepare.outputs.base_py_arg }}
 
       - name: Smoke test image
         run: |
           set -euo pipefail
-          # Verify the rw-core-keywords install + helper script layout
-          # without running the real worker entrypoint. The set of imports
-          # below covers the modules that ship in the current PyPI release:
-          # RW.Core (keyword surface), RW.platform (platform client),
-          # RW.fetchsecrets (the canonical secret-resolution entry point
-          # per AGENTS.md in platform-robot-runtime).
+          # Native-arch exec of the image -- verifies rw-core-keywords,
+          # the helper script layout, the worker binary, and that each
+          # bundled CLI actually launches on the runner's architecture.
           docker run --rm --entrypoint /bin/bash rw-base-runtime:smoke -c '
             set -eux
             python3 -c "import RW.Core, RW.platform, RW.fetchsecrets, robot"
@@ -215,46 +214,126 @@ jobs:
           '
 
       # ----------------------------------------------------------------
-      # Multi-arch build that publishes the canonical tags.
+      # Phase 2: only on push -- rebuild push-by-digest. This writes the
+      # platform-specific manifest into the registry WITHOUT applying any
+      # human-readable tags. The merge job then references this digest
+      # to assemble the multi-arch manifest under the canonical tags.
       #
-      # Skipped entirely on PRs (should_push == false) -- there's no
-      # point spending ~15min on emulated arm64 just to discard the
-      # output. arm64 regressions get caught on the first push to main
-      # after merge; if you need to validate arm64 from a PR, dispatch
-      # this workflow with push=true.
-      #
-      # Cache: reuses the amd64 layers the smoke build wrote moments ago
-      # (same buildx instance + same gha scope), and writes back the
-      # arm64 layers so the next run pays the QEMU price only for new
-      # changes.
+      # The build is cheap here: every layer is already in the local
+      # buildx cache from Phase 1, and the cache scope is shared with
+      # ourselves, so this is effectively just the push.
       # ----------------------------------------------------------------
-      - name: Build & push (multi-arch)
-        if: steps.push_flag.outputs.should_push == 'true'
+      - name: Build & push by digest
+        id: digest_push
+        if: needs.prepare.outputs.should_push == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          platforms: ${{ inputs.platforms || 'linux/amd64,linux/arm64' }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ needs.prepare.outputs.repo_lc }},push-by-digest=true,name-canonical=true,push=true
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             io.runwhen.runtime.commit=${{ github.sha }}
-          cache-from: type=gha,scope=rw-base-runtime
-          cache-to: type=gha,mode=max,scope=rw-base-runtime
+          cache-from: type=gha,scope=rw-base-runtime-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=rw-base-runtime-${{ matrix.arch }}
           build-args: |
-            ${{ steps.args.outputs.worker_arg }}
-            ${{ steps.args.outputs.base_py_arg }}
+            ${{ needs.prepare.outputs.worker_arg }}
+            ${{ needs.prepare.outputs.base_py_arg }}
+
+      - name: Stage digest for merge job
+        if: needs.prepare.outputs.should_push == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest="${{ steps.digest_push.outputs.digest }}"
+          # The merge job enumerates files in this dir; the filename
+          # is the digest minus the "sha256:" prefix.
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: needs.prepare.outputs.should_push == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ===========================================================================
+  # merge — combine the per-arch digests into the final multi-arch manifest.
+  # No image rebuild happens here; `buildx imagetools create` is a registry
+  # metadata operation only.
+  # ===========================================================================
+  merge:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.should_push == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        env:
+          REPO_LC: ${{ needs.prepare.outputs.repo_lc }}
+          TAG_CSV: ${{ needs.prepare.outputs.tags }}
+        run: |
+          set -euo pipefail
+          # Build the -t <tag> argv from the comma-separated tag list.
+          tag_args=()
+          IFS=',' read -ra TAGS <<< "${TAG_CSV}"
+          for t in "${TAGS[@]}"; do tag_args+=(-t "$t"); done
+
+          # Build the @<digest> argv from the staged digest files.
+          digest_args=()
+          for f in /tmp/digests/*; do
+            d="$(basename "$f")"
+            digest_args+=("${REPO_LC}@sha256:${d}")
+          done
+
+          echo "Tags:    ${TAGS[*]}"
+          echo "Digests: ${digest_args[*]}"
+
+          docker buildx imagetools create "${tag_args[@]}" "${digest_args[@]}"
+
+      - name: Inspect resulting manifest
+        env:
+          TAG_CSV: ${{ needs.prepare.outputs.tags }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra TAGS <<< "${TAG_CSV}"
+          docker buildx imagetools inspect "${TAGS[0]}"
 
       - name: Summary
+        env:
+          TAG_CSV: ${{ needs.prepare.outputs.tags }}
         run: |
           {
             echo "## rw-base-runtime build"
             echo
-            echo "- Event:    \`${{ github.event_name }}\`"
-            echo "- Ref:      \`${{ github.ref }}\`"
-            echo "- Sha:      \`${{ github.sha }}\`"
-            echo "- Pushed:   \`${{ steps.push_flag.outputs.should_push }}\`"
-            echo "- Platforms: \`${{ inputs.platforms || 'linux/amd64,linux/arm64' }}\`"
+            echo "- Event:  \`${{ github.event_name }}\`"
+            echo "- Ref:    \`${{ github.ref }}\`"
+            echo "- Sha:    \`${{ github.sha }}\`"
+            echo "- Pushed: \`true\`"
+            echo
+            echo "### Published manifest"
+            IFS=',' read -ra TAGS <<< "${TAG_CSV}"
+            for t in "${TAGS[@]}"; do
+              echo "- \`${t}\`"
+            done
           } >> "$GITHUB_STEP_SUMMARY"
