@@ -22,8 +22,13 @@
 # Codecollection consumption (example):
 #   ARG BASE_IMAGE=ghcr.io/runwhen-contrib/rw-base-runtime:latest
 #   FROM ${BASE_IMAGE}
-#   COPY --chown=runwhen:0 . /home/runwhen/codecollection
-#   RUN pip install --no-cache-dir -r /home/runwhen/codecollection/requirements.txt
+#   COPY --chown=runwhen:0 . /home/runwhen/collection
+#   RUN pip install --no-cache-dir -r /home/runwhen/collection/requirements.txt
+#
+# The codecollection MUST land at /home/runwhen/collection — that path is
+# what PAPI's RW_PATH_TO_ROBOT references and what runrobot.sh / runrobot.py
+# resolve against. PYTHONPATH below adds ${RUNWHEN_HOME}/collection and
+# ${RUNWHEN_HOME}/collection/libraries for the same reason.
 
 ARG BASE_PY_IMAGE=python:3.14.2-slim-bookworm
 ARG WORKER_IMAGE=us-docker.pkg.dev/runwhen-nonprod-shared/public-images/runner-worker:2026-02-20.1
@@ -274,7 +279,12 @@ RUN mkdir -p ${TMPDIR} && chmod 1777 ${TMPDIR}
 # PYTHONPATH lets codecollections import RWP / runtime_metrics directly,
 # and exposes the codecollection's own libraries/codebundles dirs (when the
 # CC image lays them down at the conventional path below).
-ENV PYTHONPATH="${RUNWHEN_HOME}/robot-runtime:${RUNWHEN_HOME}/codecollection:${RUNWHEN_HOME}/codecollection/libraries"
+#
+# Convention: codecollection contents (codebundles/, libraries/, ...) MUST
+# be copied to ${RUNWHEN_HOME}/collection — NOT /codecollection. PAPI emits
+# RW_PATH_TO_ROBOT=$(RUNWHEN_HOME)/collection/codebundles/<bundle>/sli.robot
+# and runrobot.{sh,py} only know how to resolve under /collection/.
+ENV PYTHONPATH="${RUNWHEN_HOME}/robot-runtime:${RUNWHEN_HOME}/collection:${RUNWHEN_HOME}/collection/libraries"
 ENV PATH="${PATH}:/usr/local/bin:${RUNWHEN_HOME}/.local/bin"
 
 USER runwhen

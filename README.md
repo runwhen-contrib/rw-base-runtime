@@ -62,11 +62,17 @@ their own `Dockerfile`:
 ARG BASE_IMAGE=ghcr.io/runwhen-contrib/rw-base-runtime:latest
 FROM ${BASE_IMAGE}
 
-COPY --chown=runwhen:0 . /home/runwhen/codecollection
-RUN if [ -f /home/runwhen/codecollection/requirements.txt ]; then \
-      pip install --no-cache-dir -r /home/runwhen/codecollection/requirements.txt ; \
+COPY --chown=runwhen:0 . /home/runwhen/collection
+RUN if [ -f /home/runwhen/collection/requirements.txt ]; then \
+      pip install --no-cache-dir -r /home/runwhen/collection/requirements.txt ; \
     fi
 ```
+
+The codecollection contents MUST land at `/home/runwhen/collection` (not
+`/codecollection`). PAPI emits `RW_PATH_TO_ROBOT=$(RUNWHEN_HOME)/collection/codebundles/...`
+and `runrobot.{sh,py}` only resolve paths under `/home/runwhen/collection`,
+so a mismatch here will surface as `FileNotFoundError: Could not find the
+robot file in any known locations.` at runtime.
 
 The codecollection-registry `OCISource` and the
 [radically-simple-design](https://github.com/runwhen/platform-robot-runtime/blob/main/docs/migration/radically-simple-design.md)
