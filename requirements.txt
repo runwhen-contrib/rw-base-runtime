@@ -7,7 +7,7 @@
 # azure-mgmt-{containerservice,resource,subscription}, kubernetes, and
 # opentelemetry-{api,sdk,exporter-otlp-proto-http} -- so codecollection
 # images do NOT need to re-list any of those.
-rw-core-keywords>=2026.3.6.1
+rw-core-keywords>=2026.07.15.1
 
 # psutil is consumed by the runtime metrics daemon (scripts/metrics_daemon.py,
 # scripts/process_metrics.py, scripts/runtime_metrics.py). It is intentionally
