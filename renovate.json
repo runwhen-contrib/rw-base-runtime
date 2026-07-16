@@ -1,0 +1,167 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Renovate configuration for rw-base-runtime",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    ":automergeDigest",
+    ":automergeBranch"
+  ],
+  "timezone": "America/New_York",
+  "schedule": [
+    "before 10am on monday"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "assignees": [
+    "@runwhen-contrib/maintainers"
+  ],
+  "reviewers": [
+    "@runwhen-contrib/maintainers"
+  ],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "packageRules": [
+    {
+      "description": "Group pip requirements",
+      "matchManagers": [
+        "pip_requirements"
+      ],
+      "groupName": "Python requirements",
+      "schedule": [
+        "before 10am on monday"
+      ],
+      "automerge": false,
+      "reviewersFromCodeOwners": true
+    },
+    {
+      "description": "Group Docker base images",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "groupName": "Docker base images",
+      "automerge": true,
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Group GitHub Actions",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "GitHub Actions",
+      "automerge": true,
+      "matchUpdateTypes": [
+        "patch",
+        "pin",
+        "digest"
+      ]
+    },
+    {
+      "description": "Separate major updates",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "schedule": [
+        "before 10am on monday"
+      ],
+      "labels": [
+        "dependencies",
+        "major-update"
+      ],
+      "reviewersFromCodeOwners": true
+    }
+  ],
+  "dockerfile": {
+    "enabled": true
+  },
+  "pip_requirements": {
+    "enabled": true,
+    "fileMatch": [
+      "(^|/)requirements\\.txt$"
+    ]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update Python version in Dockerfile FROM statements",
+      "managerFilePatterns": [
+        "/Dockerfile$"
+      ],
+      "matchStrings": [
+        "FROM python:(?<currentValue>[\\d.]+)(?:-slim-bookworm|-alpine|-slim|-buster)?\\s"
+      ],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "python",
+      "extractVersionTemplate": "^(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Update Rust version in Dockerfile FROM statements",
+      "managerFilePatterns": [
+        "/Dockerfile$"
+      ],
+      "matchStrings": [
+        "FROM rust:(?<currentValue>[\\d.]+)(?:-slim-bookworm|-alpine|-slim|-buster)?\\s"
+      ],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "rust",
+      "extractVersionTemplate": "^(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Update Google Cloud SDK version in Dockerfile",
+      "managerFilePatterns": [
+        "/Dockerfile$"
+      ],
+      "matchStrings": [
+        "CLOUD_SDK_VERSION=(?<currentValue>.*)\\s"
+      ],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "google/cloud-sdk",
+      "extractVersionTemplate": "^(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Update Linear CLI version in Dockerfile",
+      "managerFilePatterns": [
+        "/Dockerfile$"
+      ],
+      "matchStrings": [
+        "LINEAR_CLI_VERSION=(?<currentValue>.*)\\s"
+      ],
+      "datasourceTemplate": "crate",
+      "depNameTemplate": "linear-cli",
+      "extractVersionTemplate": "^(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Update PowerShell version in Dockerfile",
+      "managerFilePatterns": [
+        "/Dockerfile$"
+      ],
+      "matchStrings": [
+        "PW_VERSION=(?<currentValue>.*)\\s"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "PowerShell/PowerShell",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "schedule": [
+      "at any time"
+    ]
+  },
+  "osvVulnerabilityAlerts": true,
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Dependency Dashboard",
+  "dependencyDashboardHeader": "This issue lists Renovate updates and detected dependencies. Read the [Dependency Dashboard](https://docs.renovatebot.com/key-concepts/dashboard/) docs to learn more.",
+  "dependencyDashboardFooter": "- [ ] <!-- rebase-check -->If you want to rebase/retry any failed PRs, check this box"
+}
