@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.25
 #
 # rw-base-runtime — the complete RunWhen runtime image.
 #
