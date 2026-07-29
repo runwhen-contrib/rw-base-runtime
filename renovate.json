@@ -154,10 +154,7 @@
     }
   ],
   "vulnerabilityAlerts": {
-    "enabled": true,
-    "schedule": [
-      "at any time"
-    ]
+    "enabled": false
   },
   "osvVulnerabilityAlerts": true,
   "dependencyDashboard": true,
