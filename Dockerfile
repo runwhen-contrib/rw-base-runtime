@@ -119,15 +119,12 @@ RUN . /tmp/arch_vars && \
     rm -rf /tmp/awscliv2.zip /tmp/aws
 
 # ---------------------------------------------------------------------------
-# Helm (latest stable, with a pinned fallback if the API rate-limits us)
+# Helm (latest stable; build fails if GitHub API unavailable)
 # ---------------------------------------------------------------------------
 RUN . /tmp/arch_vars && \
     HELM_VERSION="$(curl -fsSL https://api.github.com/repos/helm/helm/releases/latest | jq -r '.tag_name')" && \
     HELM_URL="https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_BIN}.tar.gz" && \
-    if ! curl -fsSL -o /tmp/helm.tar.gz "${HELM_URL}"; then \
-        HELM_VERSION="v3.18.6"; \
-        curl -fsSL -o /tmp/helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_BIN}.tar.gz"; \
-    fi && \
+    curl -fsSL -o /tmp/helm.tar.gz "${HELM_URL}" && \
     tar -zxf /tmp/helm.tar.gz -C /tmp && \
     mv /tmp/linux-${ARCH_BIN}/helm /usr/local/bin/helm && \
     chmod +x /usr/local/bin/helm && \
@@ -154,10 +151,7 @@ RUN . /tmp/arch_vars && \
 RUN . /tmp/arch_vars && \
     ISTIO_VERSION="$(curl -fsSL https://api.github.com/repos/istio/istio/releases/latest | jq -r '.tag_name')" && \
     ISTIO_URL="https://github.com/istio/istio/releases/download/${ISTIO_VERSION}/istioctl-${ISTIO_VERSION}-linux-${ARCH_BIN}.tar.gz" && \
-    if ! curl -fsSL -o /tmp/istioctl.tar.gz "${ISTIO_URL}"; then \
-        ISTIO_VERSION="1.27.0"; \
-        curl -fsSL -o /tmp/istioctl.tar.gz "https://github.com/istio/istio/releases/download/${ISTIO_VERSION}/istioctl-${ISTIO_VERSION}-linux-${ARCH_BIN}.tar.gz"; \
-    fi && \
+    curl -fsSL -o /tmp/istioctl.tar.gz "${ISTIO_URL}" && \
     tar -xzf /tmp/istioctl.tar.gz -C /tmp && \
     mv /tmp/istioctl /usr/local/bin/ && chmod +x /usr/local/bin/istioctl && \
     rm /tmp/istioctl.tar.gz
@@ -165,7 +159,7 @@ RUN . /tmp/arch_vars && \
 # ---------------------------------------------------------------------------
 # PowerShell — many Azure tasks shell out to pwsh.
 # ---------------------------------------------------------------------------
-ARG PW_VERSION=7.5.4
+ARG PW_VERSION=7.6.4
 RUN . /tmp/arch_vars && \
     if [ "$ARCH_BIN" = "amd64" ]; then PW_ARCH="x64"; else PW_ARCH="arm64"; fi && \
     curl -fsSL "https://github.com/PowerShell/PowerShell/releases/download/v${PW_VERSION}/powershell-${PW_VERSION}-linux-${PW_ARCH}.tar.gz" -o /tmp/pwsh.tar.gz && \
