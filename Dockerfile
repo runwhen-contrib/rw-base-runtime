@@ -9,7 +9,7 @@
 #   - The helper scripts that wire the worker to robotframework
 #       (entrypoint.sh, runrobot.{sh,py}, RWP.py, metrics_daemon.py, ...)
 #   - The standard production CLI tooling (kubectl, aws, az, helm, gcloud,
-#     skopeo, jq, yq, pwsh, gh, kubelogin, istioctl, terraform-free)
+#     skopeo, yq, pwsh, gh, kubelogin, istioctl, terraform-free)
 #
 # Build args you can override:
 #   BASE_PY_IMAGE   – upstream python image (defaults to a pinned slim-bookworm)
@@ -94,12 +94,9 @@ RUN ARCH=$(uname -m) && \
     fi && cat /tmp/arch_vars
 
 # ---------------------------------------------------------------------------
-# jp + yq (small, no dependency)
+# yq
 # ---------------------------------------------------------------------------
 RUN . /tmp/arch_vars && \
-    JP_ARCH="$ARCH_BIN" && \
-    curl -fsSL "https://github.com/jmespath/jp/releases/download/0.2.1/jp-linux-${JP_ARCH}" -o /usr/local/bin/jp && \
-    chmod +x /usr/local/bin/jp && \
     curl -fsSL "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${ARCH_BIN}" -o /usr/bin/yq && \
     chmod +x /usr/bin/yq
 

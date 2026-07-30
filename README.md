@@ -19,7 +19,7 @@ should `FROM` this image.
   - `metrics_daemon.py`, `process_metrics.py`, `runtime_metrics.py`
 - Standard cloud / cluster CLIs: `kubectl`, `aws`, `helm`, `az`,
   `kubelogin`, `gcloud` (+ `gke-gcloud-auth-plugin`), `istioctl`, `pwsh`,
-  `gh`, `jq`, `yq`, `jp`, `skopeo`, `git`.
+  `gh`, `jq`, `yq`, `skopeo`, `git`.
 - AI / workflow CLIs that codecollections may want to invoke from a task:
   `linear-cli` (Finesssee/linear-cli, built from crates.io against
   bookworm glibc), `claude` (Claude Code, standalone binary), `cursor`
