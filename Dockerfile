@@ -30,7 +30,7 @@
 # resolve against. PYTHONPATH below adds ${RUNWHEN_HOME}/collection and
 # ${RUNWHEN_HOME}/collection/libraries for the same reason.
 
-ARG BASE_PY_IMAGE=python:3.14.5-slim-bookworm
+ARG BASE_PY_IMAGE=python:3.14.7-slim-bookworm
 ARG WORKER_IMAGE=us-docker.pkg.dev/runwhen-nonprod-shared/public-images/runner-worker:2026-07-29.1
 ARG CLOUD_SDK_VERSION=532.0.0
 ARG LINEAR_CLI_VERSION=0.3.22
