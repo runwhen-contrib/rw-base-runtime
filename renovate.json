@@ -87,16 +87,16 @@
   },
   "pip_requirements": {
     "enabled": true,
-    "fileMatch": [
-      "(^|/)requirements\\.txt$"
+    "managerFilePatterns": [
+      "/(^|/)requirements\\.txt$/"
     ]
   },
   "customManagers": [
     {
       "customType": "regex",
       "description": "Update Python version in Dockerfile FROM statements",
-      "fileMatch": [
-        "/Dockerfile$"
+      "managerFilePatterns": [
+        "//Dockerfile$/"
       ],
       "matchStrings": [
         "FROM python:(?<currentValue>[\\d.]+)(?:-slim-bookworm|-alpine|-slim|-buster)?\\s"
@@ -108,8 +108,8 @@
     {
       "customType": "regex",
       "description": "Update Rust version in Dockerfile FROM statements",
-      "fileMatch": [
-        "/Dockerfile$"
+      "managerFilePatterns": [
+        "//Dockerfile$/"
       ],
       "matchStrings": [
         "FROM rust:(?<currentValue>[\\d.]+)(?:-slim-bookworm|-alpine|-slim|-buster)?\\s"
@@ -121,8 +121,8 @@
     {
       "customType": "regex",
       "description": "Update Google Cloud SDK version in Dockerfile",
-      "fileMatch": [
-        "/Dockerfile$"
+      "managerFilePatterns": [
+        "//Dockerfile$/"
       ],
       "matchStrings": [
         "CLOUD_SDK_VERSION=(?<currentValue>.*)\\s"
@@ -134,8 +134,8 @@
     {
       "customType": "regex",
       "description": "Update Linear CLI version in Dockerfile",
-      "fileMatch": [
-        "/Dockerfile$"
+      "managerFilePatterns": [
+        "//Dockerfile$/"
       ],
       "matchStrings": [
         "LINEAR_CLI_VERSION=(?<currentValue>.*)\\s"
@@ -147,8 +147,8 @@
     {
       "customType": "regex",
       "description": "Update PowerShell version in Dockerfile",
-      "fileMatch": [
-        "/Dockerfile$"
+      "managerFilePatterns": [
+        "//Dockerfile$/"
       ],
       "matchStrings": [
         "PW_VERSION=(?<currentValue>.*)\\s"
